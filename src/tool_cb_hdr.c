@@ -237,9 +237,11 @@ size_t tool_header_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
 static char *get_cd_field(const char *cd, const char *fieldname,
                           size_t namelen) {
   const char *p = cd;
+  const char *q;
   const char *end;
   char *out;
   char last = '\0';
+  char quote = '"';
   bool in_quotes = FALSE;
 
   if(0 == namelen)
@@ -258,34 +260,38 @@ static char *get_cd_field(const char *cd, const char *fieldname,
     for(;;) {
       end++;
 
-      if(*end == '"') {
-        if(in_quotes) {
+      if(in_quotes) {
+        if(*end == quote) {
           if(last != '\\') {
             /* this is not a backslashed quote inside a string */
             in_quotes = FALSE;
           }
         }
-        else {
-          in_quotes = TRUE;
-        }
       }
-      else if(!in_quotes && *end == ';')
+      else if(*end == '"' || *end == '\'') {
+        in_quotes = TRUE;
+        quote = *end;
+      }
+      else if(*end == ';') {
         break;
-      else if(*end == '\0' || *end == '\r' || *end == '\n')
+      }
+      else if(*end == '\0' || *end == '\r' || *end == '\n') {
         break;
+      }
 
       last = *end;
     }
 
     if(strncmp(p, fieldname, namelen) == 0 && p[namelen] == '=') {
       p += namelen + 1;
-      if(*p == '"') {
+      if(*p == '"' || *p == '\'') {
+        quote = *p;
         p++;
-        end = strrchr(p, '"');
+        q = strrchr(p, quote);
 
-        /* malformed header */
-        if(!end)
-          return NULL;
+        /* the second quote may be missing -- tolerate it */
+        if(q)
+          end = q;
       }
 
       /* simple implementation of strndup() */
@@ -309,9 +315,6 @@ static char *get_cd_field(const char *cd, const char *fieldname,
 static char *parse_filename_nostar(const char *ptr, size_t len)
 {
   char *copy;
-  char *p;
-  char *q;
-  char  stop = '\0';
 
   if(0 == len)
     len = strlen(ptr);
