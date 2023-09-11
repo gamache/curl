@@ -239,7 +239,7 @@ static char *get_cd_field(const char *cd, const char *fieldname,
   const char *p = cd;
   const char *end;
   char *out;
-  char last;
+  char last = '\0';
   bool in_quotes = FALSE;
 
   if(0 == namelen)
@@ -257,6 +257,7 @@ static char *get_cd_field(const char *cd, const char *fieldname,
     end = p;
     for(;;) {
       end++;
+
       if(*end == '"') {
         if(in_quotes) {
           if(last != '\\') {
@@ -268,7 +269,9 @@ static char *get_cd_field(const char *cd, const char *fieldname,
           in_quotes = TRUE;
         }
       }
-      else if(*end == '\0' || *end == ';' || *end == '\r' || *end == '\n')
+      else if(!in_quotes && *end == ';')
+        break;
+      else if(*end == '\0' || *end == '\r' || *end == '\n')
         break;
 
       last = *end;
@@ -319,20 +322,6 @@ static char *parse_filename_nostar(const char *ptr, size_t len)
     return NULL;
   memcpy(copy, ptr, len);
   copy[len] = '\0';
-
-  p = copy;
-  if(*p == '\'' || *p == '"') {
-    /* store the starting quote */
-    stop = *p;
-    p++;
-  }
-  else
-    stop = ';';
-
-  /* scan for the end letter and stop there */
-  q = strchr(p, stop);
-  if(q)
-    *q = '\0';
 
   return parse_filename_post_process(copy);
 }
