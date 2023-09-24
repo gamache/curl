@@ -138,7 +138,8 @@ size_t tool_header_cb(char *ptr, size_t size, size_t nmemb, void *userdata)
    * This callback sets the filename where output shall be written when
    * curl options --remote-name (-O) and --remote-header-name (-J) have
    * been simultaneously given and additionally server returns an HTTP
-   * Content-Disposition header specifying a filename property.
+   * Content-Disposition header specifying a filename and/or filename*
+   * property.
    */
 
   curl_easy_getinfo(per->curl, CURLINFO_SCHEME, &scheme);
@@ -333,45 +334,134 @@ static char *parse_filename_nostar(const char *ptr, size_t len)
  * Copies a file name part from a filename*= field, decodes it, and returns
  * an ALLOCATED data buffer.
  */
-static char *parse_filename_star(const char *ptr, size_t len)
+static char *parse_filename_star(const char *field, size_t len)
 {
-  char *copy;
   char *p;
-  char *q;
+  char *filename;
+  char *encoded;
+
+  bool *win_unicode = FALSE;
+#ifdef _UNICODE
+  win_unicode = TRUE;
+#endif
 
   if(0 == len)
-    len = strlen(ptr);
-
-  /* simple implementation of strndup() */
-  copy = malloc(len + 1);
-  if(!copy)
-    return NULL;
-  memcpy(copy, ptr, len);
-  copy[len] = '\0';
+    len = strlen(field);
 
   /* The filename* field observes the 'ext-value' format specified in RFC 5987,
    * Section 3.2, e.g.:
-   *   filename*=UTF-8'somelang'My%20cool%20filename.html
-   * The text encoding and language are ignored here, so we skip past the
-   * second ' to get to the URL-encoded filename.
+   *   filename*=encoding'lang'My%20cool%20filename.html
+   *
+   * Supported values of `encoding` are "UTF-8" and "ISO-8859-1".
+   * `lang` is ignored.
+   *
+   * On Windows, if Curl was built with ENABLE_UNICODE, the incoming filename
+   * will be converted to UTF-16. Codepoints above U+FFFF will be excluded.
+   *
+   * On Windows, if Curl was not built with ENABLE_UNICODE, the incoming
+   * filename will be converted to ISO-8859-1. Codepoints above U+00FF will
+   * be excluded.
+   *
+   * On non-Windows platforms, the filename will be converted into UTF-8.
    */
 
-  p = strchr(copy, '\'');
+  /* Point `filename` to the first char of the filename */
+  p = strchr(field, '\'');
   if(!p)
     return NULL;
-  q = strchr(p + 1, '\'');
-  if(!q)
+  filename = strchr(p + 1, '\'');
+  if(!filename)
     return NULL;
-  q++;
+  filename++;
 
-  p = copy;
-  copy = curl_easy_unescape(NULL, q, 0, NULL);
-  Curl_safefree(p);
-  if(!copy)
+  /* URL-decode filename */
+  filename = curl_easy_unescape(NULL, filename, 0, NULL);
+  if(!filename)
     return NULL;
 
-  return parse_filename_post_process(copy);
+  if(0 == strncmp(field, "UTF-8'", 6)) {
+    if(win_unicode) {
+      encoded = filename;
+    }
+    else {
+      encoded = utf_8_to_iso_8859_1(filename);
+      free(filename);
+    }
+  }
+  else if(0 == strncmp(field, "ISO-8859-1'", 11)) {
+    if(win_unicode) {
+      encoded = iso_8859_1_to_utf_8(filename);
+      free(filename);
+    }
+    else {
+      encoded = filename;
+    }
+  }
+
+  return parse_filename_post_process(encoded);
 }
+
+/* Converts UTF-8 codepoints up to U+00FF into ISO-8869-1 encoding.
+ * Codepoints above U+00FF are skipped.
+ * Returns NULL on invalid UTF-8 input.
+ */
+static char *utf_8_to_iso_8859_1(const char *utf8, size_t len) {
+  char *encoded;
+  char *encp;
+  char *p = utf8;
+
+  if(0 == len)
+    len = strlen(utf8);
+
+  /* ISO-8859-1 is never longer than UTF-8 */
+  encoded = malloc(len);
+  encp = encoded;
+
+  while(p++) {
+    if(*p >= 0xF0) {
+      /* four-byte codepoint, skip it */
+      p += 3;
+    }
+    else if(*p >= 0xE0) {
+      /* three-byte codepoint, skip it */
+      p += 2;
+    }
+    else if(*p >= 0xC0) {
+      /* two-byte codepoint */
+      if(*p == 0xC2 || *p == 0xC3) {
+        /* U+0080 through U+00FF */
+        *encp = 0x80;          /* bit 8 */
+        if(*p & 1 == 1)
+          *encp |= 0x40;       /* bit 7 */
+
+        /* handle continuation byte */
+        p++;
+        if(*p & 0xC0 != 0x80) {
+          /* invalid UTF-8 -- not a continuation byte */
+          free(encoded);
+          return NULL;
+        }
+        *encp |= *p & 0x3F;    /* low 6 bits */
+        encp++;
+      }
+      else {
+        /* higher than U+00FF, skip it */
+        p++;
+      }
+    }
+    else if(*p < 0x80) {
+      /* low ASCII byte */
+      *encp++ = *p;
+    }
+    else {
+      /* we are in a continuation byte -- invalid UTF-8 */
+      free(encoded);
+      return NULL;
+    }
+
+    *encp = '\0';
+    return encoded;
+  }
 
 static char *parse_filename_post_process(char *copy)
 {
