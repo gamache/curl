@@ -35,6 +35,7 @@
 #include "tool_cb_hdr.h"
 #include "tool_cb_wrt.h"
 #include "tool_operate.h"
+#include "tool_operhlp.h"
 #include "tool_libinfo.h"
 
 #include "memdebug.h" /* keep this as LAST include */
@@ -44,6 +45,7 @@ static char *get_cd_field(const char *cd, const char *fieldname,
 static char *parse_filename_nostar(const char *ptr, size_t len);
 static char *parse_filename_star(const char *ptr, size_t len);
 static char *parse_filename_post_process(char *copy);
+
 
 #ifdef WIN32
 #define BOLD
@@ -339,8 +341,14 @@ static char *parse_filename_star(const char *field, size_t len)
   char *p;
   char *filename;
   char *encoded;
+  CURLcode result;
+  bool windows = FALSE;
+  bool win_unicode = FALSE;
 
-  bool *win_unicode = FALSE;
+#ifdef WIN32
+  windows = TRUE;
+#endif
+
 #ifdef _UNICODE
   win_unicode = TRUE;
 #endif
@@ -350,10 +358,10 @@ static char *parse_filename_star(const char *field, size_t len)
 
   /* The filename* field observes the 'ext-value' format specified in RFC 5987,
    * Section 3.2, e.g.:
-   *   filename*=encoding'lang'My%20cool%20filename.html
+   *   filename*="charset'language'My%20cool%20filename.html"
    *
-   * Supported values of `encoding` are "UTF-8" and "ISO-8859-1".
-   * `lang` is ignored.
+   * Supported values of `charset` are "UTF-8" and "ISO-8859-1".
+   * `language` is ignored.
    *
    * On Windows, if Curl was built with ENABLE_UNICODE, the incoming filename
    * will be converted to UTF-16. Codepoints above U+FFFF will be excluded.
@@ -379,89 +387,27 @@ static char *parse_filename_star(const char *field, size_t len)
   if(!filename)
     return NULL;
 
+  encoded = filename;
+
   if(0 == strncmp(field, "UTF-8'", 6)) {
-    if(win_unicode) {
-      encoded = filename;
-    }
-    else {
-      encoded = utf_8_to_iso_8859_1(filename);
+    if(windows && !win_unicode) {
+      result = utf_8_to_iso_8859_1(filename, 0, &encoded);
+      if(result)
+        return NULL;
       free(filename);
     }
   }
   else if(0 == strncmp(field, "ISO-8859-1'", 11)) {
-    if(win_unicode) {
-      encoded = iso_8859_1_to_utf_8(filename);
+    if(!windows || win_unicode) {
+      result = iso_8859_1_to_utf_8(filename, 0, &encoded);
+      if(result)
+        return NULL;
       free(filename);
-    }
-    else {
-      encoded = filename;
     }
   }
 
   return parse_filename_post_process(encoded);
 }
-
-/* Converts UTF-8 codepoints up to U+00FF into ISO-8869-1 encoding.
- * Codepoints above U+00FF are skipped.
- * Returns NULL on invalid UTF-8 input.
- */
-static char *utf_8_to_iso_8859_1(const char *utf8, size_t len) {
-  char *encoded;
-  char *encp;
-  char *p = utf8;
-
-  if(0 == len)
-    len = strlen(utf8);
-
-  /* ISO-8859-1 is never longer than UTF-8 */
-  encoded = malloc(len);
-  encp = encoded;
-
-  while(p++) {
-    if(*p >= 0xF0) {
-      /* four-byte codepoint, skip it */
-      p += 3;
-    }
-    else if(*p >= 0xE0) {
-      /* three-byte codepoint, skip it */
-      p += 2;
-    }
-    else if(*p >= 0xC0) {
-      /* two-byte codepoint */
-      if(*p == 0xC2 || *p == 0xC3) {
-        /* U+0080 through U+00FF */
-        *encp = 0x80;          /* bit 8 */
-        if(*p & 1 == 1)
-          *encp |= 0x40;       /* bit 7 */
-
-        /* handle continuation byte */
-        p++;
-        if(*p & 0xC0 != 0x80) {
-          /* invalid UTF-8 -- not a continuation byte */
-          free(encoded);
-          return NULL;
-        }
-        *encp |= *p & 0x3F;    /* low 6 bits */
-        encp++;
-      }
-      else {
-        /* higher than U+00FF, skip it */
-        p++;
-      }
-    }
-    else if(*p < 0x80) {
-      /* low ASCII byte */
-      *encp++ = *p;
-    }
-    else {
-      /* we are in a continuation byte -- invalid UTF-8 */
-      free(encoded);
-      return NULL;
-    }
-
-    *encp = '\0';
-    return encoded;
-  }
 
 static char *parse_filename_post_process(char *copy)
 {

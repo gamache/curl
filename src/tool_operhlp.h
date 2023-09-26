@@ -41,4 +41,8 @@ CURLcode urlerr_cvt(CURLUcode ucode);
 
 CURLcode get_path_base(char *path, char **base);
 
+CURLcode utf_8_to_iso_8859_1(const char *utf, size_t utf_len, char **iso);
+
+CURLcode iso_8859_1_to_utf_8(const char *iso, size_t iso_len, char **utf);
+
 #endif /* HEADER_CURL_TOOL_OPERHLP_H */

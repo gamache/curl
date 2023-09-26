@@ -282,3 +282,118 @@ CURLcode get_path_base(char *path, char **base)
 
   return CURLE_OK;
 }
+
+/* Converts a string from UTF-8 encoding to ISO-8859-1, pointing *iso to
+ * an allocated string holding the result.
+ * Codepoints above U+00FF will not appear in the ISO-8859-1 output.
+ */
+CURLcode utf_8_to_iso_8859_1(const char *utf, size_t utf_len, char **iso)
+{
+  const unsigned char *p = (const unsigned char *)utf;
+  char *isop;
+
+  if(0 == utf_len)
+    utf_len = strlen(utf);
+
+  /* ISO-8859-1 is never longer than UTF-8 */
+  *iso = calloc(utf_len, sizeof(char));
+  if(!*iso)
+    return CURLE_OUT_OF_MEMORY;
+
+  isop = *iso;
+
+  while(*p) {
+    printf("c: %c\n", *p);
+    if(*p >= 0xF0) {
+      /* four-byte codepoint, skip it */
+      if((*(p + 1) & 0xC0) != 0x80 ||
+         (*(p + 2) & 0xC0) != 0x80 ||
+         (*(p + 3) & 0xC0) != 0x80) {
+        /* not a continuation byte -- invalid UTF-8 */
+        goto invalid;
+      }
+      p += 4;
+    }
+    else if(*p >= 0xE0) {
+      /* three-byte codepoint, skip it */
+      if((*(p + 1) & 0xC0) != 0x80 ||
+         (*(p + 2) & 0xC0) != 0x80) {
+        /* not a continuation byte -- invalid UTF-8 */
+        goto invalid;
+      }
+      p += 3;
+    }
+    else if(*p >= 0xC0) {
+      /* two-byte codepoint */
+      if((*(p + 1) & 0xC0) != 0x80) {
+        /* not a continuation byte -- invalid UTF-8 */
+        goto invalid;
+      }
+
+      if(*p == 0xC2 || *p == 0xC3) {
+        /* U+0080 through U+00FF */
+        *isop = 0x80;          /* bit 8 */
+        if((*p & 1) == 1)
+          *isop |= 0x40;       /* bit 7 */
+        p++;
+        *isop |= *p & 0x3F;    /* low 6 bits */
+        isop++;
+      }
+      else {
+        /* higher than U+00FF, skip it */
+        p++;
+      }
+      p++;
+    }
+    else if(*p < 0x80) {
+      /* low ASCII byte */
+      *isop++ = *p++;
+    }
+    else {
+      /* unexpected continuation byte -- invalid UTF-8 */
+      goto invalid;
+    }
+  }
+
+  return CURLE_OK;
+
+invalid:
+  free(*iso);
+  return CURLE_BAD_CONTENT_ENCODING;
+}
+
+/* Converts a string from ISO-8859-1 encoding to UTF-8, pointing *utf to
+ * an allocated string holding the result.
+ */
+CURLcode iso_8859_1_to_utf_8(const char *iso, size_t iso_len, char **utf)
+{
+  const unsigned char *p = (const unsigned char *)iso;
+  char *utfp;
+
+  if(0 == iso_len)
+    iso_len = strlen(iso);
+
+  /* UTF-8 is never more than twice as long as ISO-8859-1 */
+  *utf = calloc(iso_len * 2, sizeof(char));
+  if(!*utf)
+    return CURLE_OUT_OF_MEMORY;
+
+  utfp = *utf;
+
+  while(*p) {
+    if(*p > 0x7F) {
+      *utfp = 0xC2;               /* bit 8 */
+      if(*p & 0x40)
+        *utfp |= 1;               /* bit 7 */
+      utfp++;
+      *utfp = 0x80 | (*p & 0x3f); /* low 6 bits */
+    }
+    else {
+      *utfp = *p;
+    }
+    p++;
+    utfp++;
+  }
+
+  return CURLE_OK;
+}

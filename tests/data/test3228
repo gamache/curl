@@ -1,0 +1,22 @@
+<testcase>
+<info>
+<keywords>
+unittest
+utf_8_to_iso_8859_1
+</keywords>
+</info>
+
+#
+# Client-side
+<client>
+<server>
+none
+</server>
+<features>
+unittest
+</features>
+ <name>
+utf_8_to_iso_8859_1 unit tests
+ </name>
+</client>
+</testcase>
